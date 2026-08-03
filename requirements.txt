@@ -1,0 +1,24 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# Document processing
+pypdf
+langchain-community
+langchain-text-splitters
+
+# Embeddings (free, runs locally, no API key needed)
+langchain-huggingface
+sentence-transformers
+
+# Vector database
+langchain-chroma
+chromadb
+
+# Free LLM provider for generation (https://console.groq.com)
+groq
+
+# Testing
+pytest
+httpx
