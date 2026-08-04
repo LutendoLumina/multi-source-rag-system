@@ -22,7 +22,7 @@ The system loads the handbook PDF, cleans up PDF-extraction text artifacts, spli
 _Everything in this stack is free - embeddings run locally on your machine, and HuggingFace's free hosted Inference API is used for answer generation instead of a paid provider._
 
 # 2\. Project Structure
-
+```
 handbook-assistant/  
 data/  
 handbook.pdf # Source ZAIO Bootcamp 2026 handbook  
@@ -35,6 +35,7 @@ test_api.py # Unit tests for the /ask endpoint
 requirements.txt  
 .env.example  
 README.md
+```
 
 # 3\. Setup
 
