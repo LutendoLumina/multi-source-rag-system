@@ -1,6 +1,6 @@
 **ZAIO Handbook Assistant - RAG System**
 
-_RAG System Assignment Submission_
+_A free, local-first RAG pipeline for the ZAIO Bootcamp handbook_
 
 # 1\. Overview
 
@@ -27,8 +27,8 @@ handbook-assistant/
 data/  
 handbook.pdf # Source ZAIO Bootcamp 2026 handbook  
 vector_db/ # Persistent ChromaDB storage (from ingest.py)  
-ingest.py # Part 1: load, clean, chunk, embed, store  
-main.py # Parts 2 & 3: retrieval + generation + /ask  
+ingest.py # Load, clean, chunk, embed, store  
+main.py # Retrieval + generation + /ask endpoint  
 tests/  
 test_ingest.py # Unit tests for text cleaning  
 test_api.py # Unit tests for the /ask endpoint  
@@ -60,7 +60,7 @@ HF_MODEL=openai/gpt-oss-120b
 
 Place your handbook.pdf in the data/ folder.
 
-# 4\. Part 1 - Process the Handbook
+# 4\. Processing the Handbook
 
 Run the ingestion pipeline once (and again any time the PDF changes):
 
@@ -74,7 +74,7 @@ This:
 - Generates embeddings locally (all-MiniLM-L6-v2, 384-dim, free, no API key)
 - Stores the embeddings in a persistent ChromaDB collection using cosine distance (vector_db/)
 
-# 5\. Parts 2 & 3 - Retrieval, Generation, and the API
+# 5\. Retrieval, Generation, and the API
 
 Start the API:
 
@@ -117,7 +117,7 @@ student handbook.",
 "source": "N/A"  
 }
 
-# 6\. Part 4 - Testing the Assistant
+# 6\. Testing the Assistant
 
 Manual evaluation log across 10 questions covering diverse handbook topics, run against the live /ask endpoint:
 
@@ -150,7 +150,7 @@ Covers:
 
 _Tests mock the vector store and the HuggingFace client, so they run in under two seconds with no ingested database, live token, or network access required._
 
-# 7\. Part 5 - n8n Readiness
+# 7\. n8n Integration (Planned)
 
 The API is ready to be wired into an n8n workflow:
 
@@ -158,7 +158,7 @@ The API is ready to be wired into an n8n workflow:
 - Returns JSON - { "answer": "...", "source": "..." }
 - Handles invalid requests gracefully - empty questions return 400; missing/malformed fields return a structured 422 from FastAPI/Pydantic validation rather than crashing
 
-n8n HTTP Request node configuration (to be wired up in the next practical):
+n8n HTTP Request node configuration (planned next step):
 
 - Method: POST
 - URL: http://&lt;your-server-ip&gt;:8000/ask
@@ -166,7 +166,7 @@ n8n HTTP Request node configuration (to be wired up in the next practical):
 - Body: { "question": "={{ \$json.incoming_chat_message }}" }
 - Downstream: pipe {{ \$json.answer }} into Slack, WhatsApp, or Discord.
 
-_n8n integration itself is out of scope for this submission and will be completed next practical._
+_n8n integration is the next planned step for this project._
 
 # 8\. Design Notes - Retrieval Relevance Filtering
 
@@ -174,4 +174,4 @@ Rather than always returning exactly top_k chunks regardless of quality, /ask us
 
 The threshold was calibrated empirically against this collection: genuinely relevant chunks scored ~0.40-0.43, while an irrelevant cover-page chunk scored ~0.24 for the same query. SCORE_THRESHOLD = 0.3 was chosen to sit in that gap. This requires the vector store to use cosine distance (set via collection_metadata={"hnsw:space": "cosine"} in both ingest.py and main.py) - Chroma's default L2 distance is not bounded 0-1 and produces uncalibrated, sometimes negative relevance scores.
 
-_If re-used with a different embedding model or document set, re-check this threshold: print the scores for a handful of real questions and confirm relevant vs. irrelevant chunks still separate cleanly around the chosen cutoff.
+_If re-used with a different embedding model or document set, re-check this threshold: print the scores for a handful of real questions and confirm relevant vs. irrelevant chunks still separate cleanly around the chosen cutoff._
