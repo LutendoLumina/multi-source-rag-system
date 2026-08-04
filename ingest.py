@@ -13,35 +13,25 @@ COLLECTION_NAME = "handbook_collection"
 
 def strip_page_number_artifact(text: str) -> str:
     """
-    PyPDFLoader sometimes extracts the printed page-number footer as part of
-    the page's text stream, glued directly onto the first word of real
-    content (e.g. "16We understand the importance..."). Strip a leading
-    run of 1-4 digits that is immediately followed by a letter with no
-    space in between, since real sentence content never starts that way.
+    PyPDFLoader extracts the printed page-number footer as the first token
+    of the page's text stream, separated from the real content by a
+    newline (e.g. "16\nWe understand the importance..."). Strip a leading
+    run of 1-4 digits followed by whitespace and then a letter, since real
+    sentence content never starts that way.
     """
-    return re.sub(r'^\s*\d{1,4}(?=[A-Za-z])', '', text)
+    return re.sub(r'^\s*\d{1,4}\s+(?=[A-Za-z])', '', text)
 
 
 def normalize_extracted_text(text: str) -> str:
+    def collapse_run(match: re.Match) -> str:
+        return re.sub(r' ', '', match.group(0))
+
+    text = re.sub(r'\b(?:[A-Za-z0-9] ){1,}[A-Za-z0-9]\b', collapse_run, text)
+
     text = strip_page_number_artifact(text)
 
-    # Some PDFs extract text with every character separated by a single
-    # space (e.g. "T h i s   i s"). Find whole RUNS of 3+ single
-    # alphanumeric characters each separated by exactly one space, and
-    # only collapse spaces within that run. A run this long is virtually
-    # never a sequence of real one-letter words, so this is safe against
-    # false positives on genuine short words like "I" or "a".
-    def collapse_run(match: re.Match) -> str:
-        return re.sub(r'\s+', '', match.group(0))
-
-    text = re.sub(r'\b(?:[A-Za-z0-9]\s){1,}[A-Za-z0-9]\b', collapse_run, text)
-
-    # Remove stray whitespace before punctuation (e.g. "35 %" -> "35%",
-    # "word ," -> "word,") left behind by extraction or the collapse step.
     text = re.sub(r'\s+([.,%:;!?])', r'\1', text)
 
-    # Collapse any remaining runs of whitespace (including newlines) into
-    # a single space, then trim the ends.
     text = re.sub(r'\s+', ' ', text).strip()
 
     return text
@@ -69,7 +59,6 @@ def run_ingestion():
     chunks = text_splitter.split_documents(raw_documents)
     print(f"Created {len(chunks)} text chunks across {len(raw_documents)} pages.")
 
-    # Remove existing vector store directory to avoid mixing old embeddings
     if os.path.exists(VECTOR_DB_DIR):
         print(f"Clearing existing Vector DB directory ('{VECTOR_DB_DIR}')...")
         shutil.rmtree(VECTOR_DB_DIR)
@@ -82,7 +71,8 @@ def run_ingestion():
         documents=chunks,
         embedding=embeddings,
         persist_directory=VECTOR_DB_DIR,
-        collection_name=COLLECTION_NAME
+        collection_name=COLLECTION_NAME,
+        collection_metadata={"hnsw:space": "cosine"}
     )
 
     print("Ingestion complete! Vector database successfully created.")

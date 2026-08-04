@@ -17,19 +17,12 @@ app = FastAPI(
 CHROMA_PATH = "vector_db"
 COLLECTION_NAME = "handbook_collection"
 
-# HuggingFace's hosted Inference API free tier — get a free token at
-# https://huggingface.co/settings/tokens (read access is enough).
-# Not every model on the Hub supports the "chat completion" task through
-# HF's auto-selected provider — this default is one HF's own docs confirm
-# works. If you want to swap it, check that the model supports chat via
-# `hf models ls --warm` in a terminal, or browse huggingface.co/models
-# filtered by "Text Generation" and check it lists a chat-capable provider.
 HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-120b")
 
 NOT_FOUND_MESSAGE = "I'm sorry, but I couldn't find any information regarding that in the student handbook."
 
-# Lazily initialized so importing this module (e.g. for tests) doesn't force
-# a model download / DB connection / API key check at import time.
+SCORE_THRESHOLD = 0.3
+
 _vector_store = None
 _hf_client = None
 
@@ -43,7 +36,8 @@ def get_vector_store() -> Chroma:
         _vector_store = Chroma(
             persist_directory=CHROMA_PATH,
             embedding_function=embedding_function,
-            collection_name=COLLECTION_NAME
+            collection_name=COLLECTION_NAME,
+            collection_metadata={"hnsw:space": "cosine"}
         )
     return _vector_store
 
@@ -109,7 +103,10 @@ def ask_handbook(request: AskRequest):
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    results = get_vector_store().similarity_search(query=request.question, k=request.top_k)
+    docs_and_scores = get_vector_store().similarity_search_with_relevance_scores(
+        query=request.question, k=request.top_k
+    )
+    results = [doc for doc, score in docs_and_scores if score >= SCORE_THRESHOLD]
 
     if not results:
         return {"answer": NOT_FOUND_MESSAGE, "source": "N/A"}
@@ -122,8 +119,6 @@ def ask_handbook(request: AskRequest):
     try:
         answer = synthesize_answer(request.question, retrieved_chunks)
     except Exception as e:
-        # Keep the endpoint usable (e.g. missing/rate-limited API key)
-        # instead of a bare 500.
         return {
             "answer": f"Sorry, I couldn't generate an answer right now ({e}).",
             "source": format_source(retrieved_chunks)
