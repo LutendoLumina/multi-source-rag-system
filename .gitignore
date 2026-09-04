@@ -7,6 +7,5 @@ __pycache__/
 vector_db/
 .env
 .pytest_cache/
-
-# Database & local data
 chroma_db/
+.vscode/
