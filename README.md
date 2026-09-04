@@ -1,193 +1,163 @@
-# ZAIO Handbook Assistant — RAG System
+# Multi-Source RAG System (Student Handbook & ZAIO Website)
 
-A Retrieval-Augmented Generation (RAG) API that answers student questions about the
-**ZAIO Full-Stack AI Engineer Bootcamp 2026 Handbook**, built for the RAG System assignment.
+A Python-native Retrieval-Augmented Generation (RAG) system built with **FastAPI**, **ChromaDB**, **LangChain**, and **HuggingFace Inference API**. This API ingests unstructured documentation from both a static PDF (Student Handbook) and crawled web content (ZAIO Website), enabling accurate contextual question answering via a local n8n workflow.
 
-## 1. Overview
+---
 
-The system loads the handbook PDF, cleans up PDF-extraction text artifacts, splits it into
-chunks, embeds those chunks, and stores them in a local vector database. At query time it
-retrieves the most relevant chunks for a question and asks a free LLM to generate a grounded
-answer from them — falling back to a clear "not found" message when nothing relevant exists.
-
-**Tech stack**
-
-| Component | Choice | Cost |
-|---|---|---|
-| API framework | FastAPI | Free |
-| PDF loading | `langchain-community` (`PyPDFLoader`) | Free |
-| Text splitting | `langchain-text-splitters` | Free |
-| Embeddings | HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (runs locally) | Free |
-| Vector database | ChromaDB (`langchain-chroma`, persisted locally) | Free |
-| LLM (generation) | **Groq** (free tier — `llama-3.1-8b-instant`) | Free, no credit card |
-
-Everything in this stack is free — embeddings run locally on your machine, and Groq's free
-tier is used for answer generation instead of a paid API.
-
-## 2. Project Structure
+## Architecture Overview
 
 ```
-zaio-handbook-rag/
+[ PDF Document ] -----                       +---> [ ingest.py ] ---> [ ChromaDB Vector Store ]
+[ Web Scraper ]  -----/         (Embeddings)               |
+                                                           | (Similarity Search + Threshold)
+                                                           v
+[ n8n Workflow ] ---> POST /ask ---> [ FastAPI main.py ] --+
+                                           |
+                                           v
+                             [ HuggingFace Inference API ]
+                            (openai/gpt-oss-120b Model)
+```
+
+1. **Ingestion (`ingest.py`)**: Extracts text from `Student Handbook.pdf` using `PyPDF2`/`pdfplumber` and crawls pages from `https://www.zaio.io` using `requests` and `BeautifulSoup`. Text is normalized, chunked into overlapping segments, and stored in ChromaDB alongside metadata tags (`source`).
+2. **Vector Retrieval & Filtering**: Uses `sentence-transformers/all-MiniLM-L6-v2` locally for fast embedding generation. Performs cosine similarity search with a strict relevance score threshold (**>= 0.3**).
+3. **LLM Generation**: Connects to the HuggingFace Inference API (`openai/gpt-oss-120b`) to answer queries grounded exclusively in retrieved context.
+4. **Refusal Logic**: If no chunks pass the `0.3` similarity threshold, the API immediately short-circuits and returns:
+   > *"I could not find that information in the available knowledge base."*
+5. **Orchestration**: Fully integrable with **n8n Community Edition** via HTTP POST requests.
+
+---
+
+## Folder Structure
+
+```
+.
 ├── data/
-│   └── handbook.pdf          # Source ZAIO Bootcamp 2026 handbook
-├── vector_db/                 # Persistent ChromaDB storage (created by ingest.py)
-├── ingest.py                  # Part 1: load, clean, chunk, embed, store
-├── main.py                    # Parts 2 & 3: retrieval + generation + /ask endpoint
+│   └── student_handbook.pdf    # Source PDF document
+├── chroma_db/                  # Local persistent Chroma vector database
 ├── tests/
-│   ├── test_ingest.py         # Unit tests for text cleaning
-│   └── test_api.py            # Unit tests for the /ask endpoint
-├── requirements.txt
-├── .env.example
-└── README.md
+│   ├── test_ingest.py          # Unit tests for text cleaning and ingestion logic
+│   └── test_api.py             # Mocked unit tests for FastAPI endpoints
+├── .env                        # Local environment variables (git-ignored)
+├── .env.example                # Example configuration template
+├── ingest.py                   # Data ingestion and chunking script
+├── main.py                     # FastAPI application endpoints and RAG pipeline
+├── requirements.txt            # Python dependencies
+└── README.md                   # System documentation
 ```
 
-## 3. Setup
+---
 
-```bash
-# Clone and enter the project
-cd zaio-handbook-rag
+## Setup & Installation
 
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS/Linux
-# .\.venv\Scripts\Activate.ps1    # Windows PowerShell
+### 1. Prerequisites
+* Python 3.10+
+* Free HuggingFace Account & Access Token ([Get HF Token](https://huggingface.co/settings/tokens))
+
+### 2. Virtual Environment Setup
+Clone the repository and create a virtual environment:
+
+```powershell
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment (Windows PowerShell)
+. env\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### Get a free Groq API key
+### 3. Environment Configuration
+Create a `.env` file in the project root directory (refer to `.env.example`):
 
-1. Go to [console.groq.com](https://console.groq.com) and sign up (no credit card required).
-2. Create an API key at [console.groq.com/keys](https://console.groq.com/keys).
-3. Copy `.env.example` to `.env` and paste your key in:
-
-```bash
-cp .env.example .env
+```env
+HF_TOKEN=hf_your_actual_token_here
+HF_MODEL=openai/gpt-oss-120b
+SCORE_THRESHOLD=0.3
+CHROMA_DB_DIR=./chroma_db
 ```
 
-```
-GROQ_API_KEY=your_free_groq_api_key_here
-```
+---
 
-### Add the handbook
+## Usage Guide
 
-Place your `handbook.pdf` in the `data/` folder.
+### Step 1: Run Knowledge Base Ingestion
+Execute `ingest.py` to scrape the web content, process the handbook PDF, build embeddings, and store vector indexes in `chroma_db/`:
 
-## 4. Part 1 — Process the Handbook
-
-Run the ingestion pipeline once (and again any time the PDF changes):
-
-```bash
+```powershell
 python ingest.py
 ```
 
-This:
-- ✅ Loads the handbook PDF (`PyPDFLoader`)
-- ✅ Cleans PDF-extraction artifacts — stray footer page numbers glued onto text, and
-  character-spaced text runs (e.g. `"T h i s"` → `"This"`) — via `normalize_extracted_text()`
-- ✅ Splits the cleaned text into overlapping chunks (`RecursiveCharacterTextSplitter`)
-- ✅ Generates embeddings locally (`all-MiniLM-L6-v2`, 384-dim, free)
-- ✅ Stores the embeddings in a persistent ChromaDB collection (`vector_db/`)
+### Step 2: Start the FastAPI Server
+Launch the development server via Uvicorn:
 
-## 5. Part 2 & 3 — Retrieval, Generation, and the API
-
-Start the API:
-
-```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```powershell
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Swagger UI: http://127.0.0.1:8000/docs
+The interactive Swagger UI documentation will be accessible at:
+👉 **`http://127.0.0.1:8000/docs`**
+
+---
+
+## API Endpoints
 
 ### `POST /ask`
+Submits a user query for RAG processing.
 
-When a question comes in, the API:
-1. Embeds the question
-2. Searches ChromaDB for the most relevant chunks
-3. Sends those chunks as context to a free Groq LLM, which generates the actual answer
-4. Returns the answer plus the handbook page(s) it came from — or the not-found message if
-   nothing relevant was retrieved
-
-**Request:**
+#### Request Body
 ```json
 {
-  "question": "What is the attendance requirement?"
+  "question": "What courses does ZAIO offer?",
+  "top_k": 3
 }
 ```
 
-**Response:**
+#### Successful Response (`200 OK`)
 ```json
 {
-  "answer": "...",
-  "source": "Page 12"
+  "answer": "ZAIO’s course catalogue includes Full-Stack AI Engineer, Cloud & DevOps Engineer, Full-Stack Web Development, Data Science, Cybersecurity, and Digital Marketing bootcamps.",
+  "source": "https://www.zaio.io, Student Handbook - Page 14"
 }
 ```
 
-`top_k` (optional, default `3`) controls how many chunks are retrieved:
-```json
-{ "question": "What is the assignment weighting?", "top_k": 5 }
-```
-
-If no relevant chunks are found:
+#### Refusal Response (`200 OK` - Below Relevance Threshold)
 ```json
 {
-  "answer": "I'm sorry, but I couldn't find any information regarding that in the student handbook.",
+  "answer": "I could not find that information in the available knowledge base.",
   "source": "N/A"
 }
 ```
 
-## 6. Part 4 — Testing the Assistant
+#### Validation Error (`400 Bad Request` / `422 Unprocessable Entity`)
+Returned when empty questions or malformed JSON payloads are supplied.
 
-Manual evaluation log across 10 questions covering diverse handbook topics:
+---
 
-| # | Question | Source (Page) | Answer |
-|---|---|---|---|
-| 1 | What is the grade breakdown for the final project? | Page 13 | Final Project (React + Node) counts for 35% of the total bootcamp mark, evaluating full-stack development proficiency. |
-| 2 | When are tutor support hours? | Page 20 | Tutor support runs Tuesdays 2–4pm and 6–8pm, and Thursdays 10am–12pm and 6–8pm, bookable via Calendly or the ZAIO dashboard. |
-| 3 | When are live classes held? | Page 10 | Live classes run Tuesdays 9–11am and Thursdays 6–8pm for the first 12 weeks, then reduce to Tuesdays 9–11am only. |
-| 4 | What are the laptop system requirements? | Page 4 | A dual-core Intel i5 / AMD 3000+ / Apple M1 or better, with 4–8GB RAM, an SSD, and a stable internet connection. |
-| 5 | What is the weighting for assignments? | Page 13 | Assignments make up 25% of the final grade. |
-| 6 | What is the grade weight of coding challenges? | Page 13 | Coding challenges make up 25% of the final grade. |
-| 7 | How much are MCQs worth in the final grade? | Page 13 | MCQs account for 15% of the final mark. |
-| 8 | What topics are covered in the bootcamp? | Page 3, Page 5 | The bootcamp covers full-stack web development (HTML/CSS/JS, React, Node) integrated with AI agent engineering (LangChain, n8n). |
-| 9 | What happens if I miss a live class? | Page 10 | All live sessions are recorded, and tutors are available on standby for students who study asynchronously. |
-| 10 | What is the policy for refunding tuition fees? | N/A | I'm sorry, but I couldn't find any information regarding that in the student handbook. |
+## Running Unit Tests
 
-> Note: exact page numbers depend on `PyPDFLoader`'s (zero-indexed) page metadata — verify
-> against your own ingested PDF and adjust with a +1 offset if your printed page numbers are
-> consistently one higher.
+Unit tests use `pytest` and mock external calls (Vector Store and HuggingFace API) to allow instant offline testing:
 
-### Automated unit tests
-
-```bash
-pytest
+```powershell
+pytest tests/ -v
 ```
 
-Covers:
-- Text-cleaning helpers (`strip_page_number_artifact`, `normalize_extracted_text`)
-- `/ask` returning a grounded answer + correct source page(s)
-- `/ask` returning the not-found message when nothing is retrieved
-- `/ask` rejecting empty questions (400)
-- `/ask` handling malformed/missing-field requests gracefully (422, structured JSON)
-- `/ask` degrading gracefully (200 with an explanatory message) if the LLM call fails
+---
 
-Tests mock the vector store and Groq client, so they run without needing a real ingested
-database or a live API key.
+## n8n Integration
 
-## 7. Part 5 — n8n Readiness
+To integrate with **n8n Community Edition** locally:
 
-The API is ready to be wired into an n8n workflow:
-- **Accepts JSON** — `POST /ask` with `{"question": "...", "top_k": 3}`
-- **Returns JSON** — `{"answer": "...", "source": "..."}`
-- **Handles invalid requests gracefully** — empty questions return `400`; missing/malformed
-  fields return a structured `422` from FastAPI/Pydantic validation rather than crashing
-
-**n8n HTTP Request node configuration** (to be wired up in the next practical):
-- Method: `POST`
-- URL: `http://<your-server-ip>:8000/ask`
-- Headers: `Content-Type: application/json`
-- Body: `{ "question": "={{ $json.incoming_chat_message }}" }`
-- Downstream: pipe `{{ $json.answer }}` into Slack, WhatsApp, or Discord.
-
-n8n integration itself is out of scope for this submission and will be completed next practical.
+1. Launch n8n locally (`npx n8n` or via Docker on port `5678`).
+2. Add an **HTTP Request** node with the following configuration:
+   * **Method**: `POST`
+   * **URL**: `http://localhost:8000/ask` (or `http://host.docker.internal:8000/ask` if n8n is running in Docker)
+   * **Send Body**: `ON`
+   * **Body Content Type**: `JSON`
+   * **JSON Body**:
+     ```json
+     {
+       "question": "={{ $json.question }}"
+     }
+     ```
+3. Execute the node to receive structured JSON outputs containing `answer` and `source`.
